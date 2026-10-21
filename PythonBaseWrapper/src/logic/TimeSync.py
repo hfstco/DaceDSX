@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 #
 # Copyright 2021 Moritz Gütlein
-# 
+#
 # This code was originally published under the Apache 2.0 License (http://www.apache.org/licenses/LICENSE-2.0) in 2021.
 # In 2025, it has been relicensed under the MIT License (https://choosealicense.com/licenses/mit/) with the explicit permission of all copyright holders.
 #
-# 
+#
 
 import os
 import sys
@@ -22,8 +22,8 @@ import re
 
 
 class TimeSync():
-    
-    def __init__(self, broker, registry, topic, myID, initNoParticipants=2, logging=True, timeoutHandler=None):    
+
+    def __init__(self, broker, registry, topic, myID, initNoParticipants=2, logging=True, timeoutHandler=None):
         self.myID = myID
         self.topic = topic
         self.joinStr = {
@@ -37,7 +37,7 @@ class TimeSync():
         self.logging = logging
         self.broker = broker
         self.registry = registry
-        
+
         # self.producer = KafkaProducerKafkian(broker, registry, myID, useAvro=True, schemaPath=syncMsgSchemaPath)
         # self.consumer = KafkaConsumerKafkian(broker, registry, [self.topic], myID)
         self.producer = KafkaProducer(broker, registry, myID, useAvro=True, schemaPath=syncMsgSchemaPath)
@@ -56,11 +56,12 @@ class TimeSync():
 
         self.lastAnnouncedSentMessages = {}
         self.timeoutHandler = timeoutHandler
-        
+
         self.receiveCountErrors = {}
-        
+        self.lastObservedReceiveCount = {}
+
         self.inferedTopics = []
-        
+
         self.max_error_count = 100
 
 
@@ -79,14 +80,14 @@ class TimeSync():
             self.participants.pop(sender)
         elif (msg['Action'] == 'request' and (sender in self.participants)):
             self.participants[sender] = msg['Time']
-            
+
             for topic in msg['Messages']:
                 if(self.logging == True):
                     print("a message was announced on ",topic, flush=True)
                 if topic in self.expectedReceiveCount:
                     self.expectedReceiveCount[topic] += msg['Messages'][topic]
                     continue
-                
+
                 for pattern in self.expectedPattern:
                     if(pattern.match(topic)):
                         if(self.logging == True):
@@ -98,8 +99,8 @@ class TimeSync():
                     else:
                         if(self.logging == True):
                             print(topic,"does not match pattern: " + pattern.pattern, flush=True)
-                         
-                #neither pattern nor topic list is matching                    
+
+                #neither pattern nor topic list is matching
                 if(self.logging == True):
                     print("ignoring " + topic + ("is not in my list of interest"), flush=True)
                     print("currently in interest list:")
@@ -107,12 +108,12 @@ class TimeSync():
                         print(t)
         elif sender not in self.participants:
             print('participants',sender,'is no official member',self.participants)
-            
+
         else:
-            print('unknown request: ', msg) 
+            print('unknown request: ', msg)
             print('participants: ', self.participants)
             print('lbts: ', self.lbts, flush=True)
-            
+
         self.refreshLBTS()
 
 
@@ -126,7 +127,7 @@ class TimeSync():
                     diff[topic] = d
             else:
                 diff[topic] = copyOfSentMessages[topic]
-        
+
         self.lastAnnouncedSentMessages = copyOfSentMessages
         return diff
 
@@ -140,33 +141,53 @@ class TimeSync():
             if(self.logging == True):
                 print("time OK? NO!",t, ', actual=', self.lbts, flush=True)
             return False
-    
+
     def msgCountOK(self):
         # print("msgCountOK(self)", flush=True)
         for topic, number in self.expectedReceiveCount.items():
-            if number == 0 :                    
+            if number == 0 :
                 continue
             if topic not in self.actualReceivedMsgCount:
                 if(self.logging == True):
                     print("never received a message on ",topic, "supposed to have", number, flush=True)
-                    
+                self.lastObservedReceiveCount[topic] = 0
+
                 if topic not in self.receiveCountErrors:
                     self.receiveCountErrors[topic]=1
                 else:
                     self.receiveCountErrors[topic] = self.receiveCountErrors[topic]+1
-                    
-                if ((self.timeoutHandler is not None) and (self.receiveCountErrors[topic] % self.max_error_count == 0)):
+
+                if ((self.timeoutHandler is not None) and (self.receiveCountErrors[topic]>0)
+                    and (self.receiveCountErrors[topic] % self.max_error_count == 0)):
                     print("error count is",self.receiveCountErrors[topic],", calling timeouthandler", flush=True)
                     self.timeoutHandler()
                     print("timeouthandler returned", flush=True)
-                    
+
                 return False
-            
+
             if self.actualReceivedMsgCount[topic] < number:
                 if(self.logging == True):
                     print("msgCount OK? NO!",self.actualReceivedMsgCount, '/', self.expectedReceiveCount, flush=True)
+                received = self.actualReceivedMsgCount[topic]
+                previous = self.lastObservedReceiveCount.get(topic)
+
+                if previous is not None and received != previous:
+                    self.receiveCountErrors[topic] = 0
+                else:
+                    if topic not in self.receiveCountErrors:
+                        self.receiveCountErrors[topic] = 1
+                    else:
+                        self.receiveCountErrors[topic] = self.receiveCountErrors[topic]+1
+
+                self.lastObservedReceiveCount[topic] = received
+
+                if ((self.timeoutHandler is not None) and (self.receiveCountErrors[topic]>0)
+                    and (self.receiveCountErrors[topic] % self.max_error_count == 0)):
+                    print("error count is",self.receiveCountErrors[topic],", calling timeouthandler", flush=True)
+                    self.timeoutHandler()
+                    print("timeouthandler returned", flush=True)
                 return False
-        
+
         if(self.logging == True):
             print("msgCount OK? YES!",self.actualReceivedMsgCount, '/', self.expectedReceiveCount, flush=True)
         return True
@@ -174,7 +195,7 @@ class TimeSync():
 
 #############################################
 #####         public methods
-############################################    
+############################################
 
     def addExpectedTopic(self, topic):
         if topic not in self.expectedReceiveCount:
@@ -184,8 +205,8 @@ class TimeSync():
 
     def addExpectedPattern(self, pattern):
         self.expectedPattern.append(re.compile(pattern))
-                                        
-    def joinTiming(self):  
+
+    def joinTiming(self):
         errorCount = 0
         self.producer.produce(topic=self.topic, value=self.joinStr)
         while(len(self.participants) < self.initNoParticipants):
@@ -196,20 +217,20 @@ class TimeSync():
                 print("value",msg.value())
                 self.processSyncMsg(msg.value())
             errorCount+=1
-            
+
             # if (errorCount%103==0):
             #     self.producer.produce(topic=self.topic, value=self.joinStr)
             if (errorCount%5==0 and len(self.participants) == 0):
                 self.consumer.stop()
                 time.sleep(1)
                 self.consumer = KafkaConsumer(self.broker, self.registry, [self.topic], self.myID+str(errorCount))
-            
-                
+
+
         print("all expected participants have joined: ", len(self.participants),'/', self.initNoParticipants, flush=True)
-    
+
     def timeAdvance(self, timestep):
         t=self.currentLocalTime + timestep
-        
+
         syncmsg = {
         'Sender' : self.myID,
         'Action' : 'request',
@@ -220,8 +241,8 @@ class TimeSync():
         self.producer.produce(topic=self.topic, value=syncmsg)
         if(self.logging == True):
             print("< < < sent out time msg", syncmsg, flush=True)
-                
-                
+
+
         #wait until others are ready
         while True:
             if (self.timeOK(t)):
@@ -238,14 +259,14 @@ class TimeSync():
             except Exception as e:
                 #self.consumer = KafkaConsumer(self.broker, self.registry, [self.topic], self.myID)
                 print("timeAdvanceException",e, flush=True)
-                
+
         #wait until received all announced messages
         while True:
             # print("self.msgCountOK()", flush=True)
             if self.msgCountOK():
                 break
             time.sleep(.1)
-                
+
         self.currentLocalTime = t
         # print("currentLocalTime is",t, flush=True)
 
